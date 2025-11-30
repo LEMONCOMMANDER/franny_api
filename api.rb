@@ -1,6 +1,7 @@
 require 'sinatra'
 require 'json'
 require 'random/formatter'
+require 'uuid'
 
 =begin
 
@@ -12,7 +13,7 @@ For our rest service that supports Q&A we will set up these route schemes:
 - Get all questions ***
 - Check authorization ***
 - Filter questions ***
-- Get a question
+- Get a question ***
 - Answer a question
   - define model
   - data validation
@@ -29,9 +30,24 @@ For our rest service that supports Q&A we will set up these route schemes:
 
 =begin
 
+  QUESTIONS
   id: UUID ~ auto generated
   title: string
   description: string
+  status: string
+  authorId: UUID of an author (arbitrary string for example)
+  createdAt: number
+  createdById: UUID
+  updatedAt: number
+  updatedById: UUID
+  deletedAt: number?
+  deletedById: UUID?
+  
+
+  ANSWERS
+  id: UUID ag
+  questionId: uuid 
+  answer: string 
   authorId: UUID of an author (arbitrary string for example)
   createdAt: number
   createdById: UUID
@@ -52,16 +68,26 @@ def authorize(request)
   request.has_header?('HTTP_AUTHORIZATION') && request.fetch_header('HTTP_AUTHORIZATION') == 'Bearer TOKEN-HERE'
 end
 
+## POST
+
 post '/questions' do
   unless authorize(request)
     status 401
     return "Unauthorized"
   end
 
+
   requiredKeys = ['title', 'description', 'authorId']
 
   request.body.rewind  # in case someone already read it
-  questionBody = JSON.parse request.body.read
+  questionBodyCheck = request.body.read 
+  
+  if questionBodyCheck.empty?
+    status 400
+    return "Invalid payload."
+  end
+
+  questionBody = JSON.parse questionBodyCheck
 
   #data validation
   unless questionBody.keys.difference(requiredKeys).empty?
@@ -75,12 +101,22 @@ post '/questions' do
       return "Invalid request, missing key: #{key}."
     end
   end
+
+  unless UUID.validate(questionBody['authorId'])
+    status 400
+    return "Invalid authorId."
+  end
   #end data validation
 
   now = Time.now.to_i
 
-  question = questionBody.dup
-  question[:id] = Random.uuid
+  question = {}
+  questionBody.each_key do |key|
+      question[key.to_sym] = questionBody[key]
+  end
+
+  question[:id] = UUID.generate
+  question[:status] = 'unanswered'
   question[:createdAt] = now
   question[:createdById] = questionBody['authorId']
   question[:updatedAt] = now
@@ -89,10 +125,40 @@ post '/questions' do
   question[:deletedById] = nil
 
   questionsArray << question
-  questionsHash[question[:id]] = question
+  questionsHash[question[:id].to_sym] = question
 
   JSON.dump(question)
 end
+
+# id: UUID ag
+# questionId: uuid 
+# answer: string 
+# authorId: UUID of an author (arbitrary string for example)
+# createdAt: number
+# createdById: UUID
+# updatedAt: number
+# updatedById: UUID
+# deletedAt: number?
+# deletedById: UUID?
+
+
+post '/questions/:id/answers' do |id|
+  unless authorize(request)
+    status 401
+    return "Unauthorized"
+  end
+
+  #validation
+    
+  #end validation  
+
+
+
+  JSON.dump(answer)  
+end
+
+
+## GET
 
 get '/questions' do
   unless authorize(request)
@@ -106,15 +172,30 @@ get '/questions' do
     accumulator || (params.has_key?(value) && !params[value].empty?)
   end
 
-  unless hasFilter
-    return JSON.dump(questionsArray)
-  end
+  return JSON.dump(questionsArray) unless hasFilter
+  
 
   filteredQuestions = questionsArray.select do |question|
     queryKeys.reduce(false) do |accumulator, key|
-      accumulator || params.has_key?(key) && !params[key].empty? && question[key].strip.include?(params[key].strip)
+      accumulator || params.has_key?(key) && !params[key].empty? && question[key.to_sym].strip.include?(params[key].strip)
     end
   end
 
   JSON.dump(filteredQuestions)
+end
+
+get '/questions/:id' do |id|
+  unless authorize(request)
+    status 401
+    return "Unauthorized"
+  end
+  
+  # validation
+  unless id && !id.strip.empty? && UUID.validate(id)
+    status 400
+    return "Invalid question id."
+  end
+  # end validation
+
+  JSON.dump(questionsHash[id.to_sym])
 end
