@@ -14,9 +14,9 @@ For our rest service that supports Q&A we will set up these route schemes:
 - Check authorization ***
 - Filter questions ***
 - Get a question ***
-- Answer a question
-  - define model
-  - data validation
+- Answer a question ***
+  - define model ****
+  - data validation ****
 - Get all question answers
 - Filter all question answers
 - Edit question
@@ -131,9 +131,9 @@ post '/questions' do
 end
 
 # id: UUID ag
-# questionId: uuid 
-# answer: string 
-# authorId: UUID of an author (arbitrary string for example)
+# questionId: uuid *
+# answer: string *
+# authorId: UUID of an author (arbitrary string for example) *
 # createdAt: number
 # createdById: UUID
 # updatedAt: number
@@ -148,11 +148,60 @@ post '/questions/:id/answers' do |id|
     return "Unauthorized"
   end
 
+  # checks request body and verifies NOT empty - = answer body
+  request.body.rewind
+  answerBodyCheck = request.body.read 
+
+  requiredKeys = ['answer', 'authorId']
+
+  if answerBodyCheck.empty?
+    status 400
+    return "Invalid payload."
+  end
+
+  answerBody = JSON.parse answerBodyCheck
+
   #validation
-    
+  unless UUID.validate(id)
+    status 400
+    return "Invalid question id"
+  end
+
+  unless questionsHash.has_key?(id.to_sym) && !questionsHash[id.to_sym][:deletedAt]
+    status 400
+    return "Invalid question id"
+  end
+
+  unless answerBody.keys.difference(requiredKeys).empty?
+    status 400
+    return "Invalid payload."
+  end
+
+  requiredKeys.each do |key|
+    unless answerBody.has_key?(key) && answerBody[key].strip != ""
+      status 400
+      return "Invalid request, missing key: #{key}."
+    end
+  end
   #end validation  
 
+  answer = {}
+  answerBody.each_key do |key|
+      answer[key.to_sym] = answerBody[key]
+  end
 
+  answer[:id] = UUID.generate
+  answer[:createdAt] = now
+  answer[:createdById] = answerBody['authorId']
+  answer[:updatedAt] = now
+  answer[:updatedById] = answerBody['authorId']
+  answer[:deletedAt] = nil
+  answer[:deletedById] = nil
+
+  answersArray << answer
+  answersHash[answer[:id].to_sym] = answer
+
+  question[id.to_sym][:status] = 'answered'
 
   JSON.dump(answer)  
 end
@@ -172,10 +221,12 @@ get '/questions' do
     accumulator || (params.has_key?(value) && !params[value].empty?)
   end
 
-  return JSON.dump(questionsArray) unless hasFilter
+  validQuestions = questionsArray.select {|question| !question[:deletedAt]}
+
+  return JSON.dump(validQuestions) unless hasFilter
   
 
-  filteredQuestions = questionsArray.select do |question|
+  filteredQuestions = validQuestions.select do |question|
     queryKeys.reduce(false) do |accumulator, key|
       accumulator || params.has_key?(key) && !params[key].empty? && question[key.to_sym].strip.include?(params[key].strip)
     end
@@ -194,6 +245,10 @@ get '/questions/:id' do |id|
   unless id && !id.strip.empty? && UUID.validate(id)
     status 400
     return "Invalid question id."
+  end
+
+  unless questionsHash[id.to_sym] && !questionsHash[id.to_sym][:deletedAt]
+    return nil
   end
   # end validation
 
