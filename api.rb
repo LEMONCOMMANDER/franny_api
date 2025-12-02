@@ -17,7 +17,8 @@ For our rest service that supports Q&A we will set up these route schemes:
 - Answer a question ***
   - define model ****
   - data validation ****
-- Get all question answers
+- Get all question answers ***
+- Get a questions and all of it's answers
 - Filter all question answers
 - Edit question
   - data validation
@@ -63,6 +64,8 @@ questionsHash = {}
 
 answersArray = []
 answersHash = {}
+
+questionsAnswersHash = {}
 
 def authorize(request)
   request.has_header?('HTTP_AUTHORIZATION') && request.fetch_header('HTTP_AUTHORIZATION') == 'Bearer TOKEN-HERE'
@@ -183,12 +186,19 @@ post '/questions/:id/answers' do |id|
       return "Invalid request, missing key: #{key}."
     end
   end
+
+  unless UUID.validate(answerBody['authorId'])
+    status 400
+    return "Invalid author id"
+  end
   #end validation  
 
   answer = {}
   answerBody.each_key do |key|
       answer[key.to_sym] = answerBody[key]
   end
+
+  now = Time.now.to_i
 
   answer[:id] = UUID.generate
   answer[:createdAt] = now
@@ -200,8 +210,13 @@ post '/questions/:id/answers' do |id|
 
   answersArray << answer
   answersHash[answer[:id].to_sym] = answer
+  unless questionsAnswersHash[id.to_sym]
+    questionsAnswersHash[id.to_sym] = [answer]
+  else
+    questionsAnswersHash[id.to_sym] << answer
+  end
 
-  question[id.to_sym][:status] = 'answered'
+  questionsHash[id.to_sym][:status] = 'answered'
 
   JSON.dump(answer)  
 end
@@ -253,4 +268,20 @@ get '/questions/:id' do |id|
   # end validation
 
   JSON.dump(questionsHash[id.to_sym])
+end
+
+get '/questions/:id/answers' do |id|
+  unless authorize(request)
+    status 401
+    return "Unauthorized"
+  end
+
+  #validations
+  unless id && !id.strip.empty? && UUID.validate(id)
+    status 400
+    return "Invalid question id."
+  end
+  #end validations
+
+  JSON.dump(questionsAnswersHash[id.to_sym] || [])
 end
