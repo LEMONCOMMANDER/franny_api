@@ -2,6 +2,7 @@ require 'sinatra'
 require 'json'
 require 'random/formatter'
 require 'uuid'
+require 'base64'
 
 =begin
 
@@ -18,14 +19,15 @@ For our rest service that supports Q&A we will set up these route schemes:
   - define model ****
   - data validation ****
 - Get all question answers ***
-- Get a questions and all of it's answers
+- Get a questions and all of it's answers ***
+- Delete question
+- Delete answer
 - Filter all question answers
 - Edit question
   - data validation
 - Edit answer
   - data validation
-- Delete question
-- Delete answer
+
 
 =end
 
@@ -67,20 +69,35 @@ answersHash = {}
 
 questionsAnswersHash = {}
 
+user = {}
+
 def authorize(request)
-  request.has_header?('HTTP_AUTHORIZATION') && request.fetch_header('HTTP_AUTHORIZATION') == 'Bearer TOKEN-HERE'
+  token = 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI4MzkyMmJiOS1jMTg0LTQ2NzEtODkxZC0yMzA2NmMzNzkzZWMiLCJuYW1lIjoiSm9obiBEb2UiLCJhZG1pbiI6dHJ1ZSwiaWF0IjoxNTE2MjM5MDIyfQ==.KMUFsIDTnFmyG3nMiGM6H9FNFUROf3wh7SmqJp-QV30'
+  
+  return false unless request.has_header?('HTTP_AUTHORIZATION') && request.fetch_header('HTTP_AUTHORIZATION') == token
+
+  tokenSplit = token.split('.')[1]
+
+  fixedUser = {}
+  JSON.parse(Base64.decode64(tokenSplit)).each_pair do |k, v|
+   fixedUser[k.to_sym] =  v
+  end
+
+  fixedUser
 end
 
 ## POST
 
 post '/questions' do
-  unless authorize(request)
+  user = authorize(request)
+  unless user
     status 401
     return "Unauthorized"
   end
 
+  authorId = user[:sub]
 
-  requiredKeys = ['title', 'description', 'authorId']
+  requiredKeys = ['title', 'description']
 
   request.body.rewind  # in case someone already read it
   questionBodyCheck = request.body.read 
@@ -105,7 +122,7 @@ post '/questions' do
     end
   end
 
-  unless UUID.validate(questionBody['authorId'])
+  unless UUID.validate(authorId)
     status 400
     return "Invalid authorId."
   end
@@ -118,12 +135,16 @@ post '/questions' do
       question[key.to_sym] = questionBody[key]
   end
 
+  puts "USER"
+  p user
+
   question[:id] = UUID.generate
   question[:status] = 'unanswered'
+  question[:authorId] = authorId
   question[:createdAt] = now
-  question[:createdById] = questionBody['authorId']
+  question[:createdById] = authorId
   question[:updatedAt] = now
-  question[:updatedById] = questionBody['authorId']
+  question[:updatedById] = authorId
   question[:deletedAt] = nil
   question[:deletedById] = nil
 
@@ -146,16 +167,19 @@ end
 
 
 post '/questions/:id/answers' do |id|
-  unless authorize(request)
+  user = authorize(request)
+  unless user
     status 401
     return "Unauthorized"
   end
+
+  authorId = user[:sub]
 
   # checks request body and verifies NOT empty - = answer body
   request.body.rewind
   answerBodyCheck = request.body.read 
 
-  requiredKeys = ['answer', 'authorId']
+  requiredKeys = ['answer']
 
   if answerBodyCheck.empty?
     status 400
@@ -187,7 +211,7 @@ post '/questions/:id/answers' do |id|
     end
   end
 
-  unless UUID.validate(answerBody['authorId'])
+  unless UUID.validate(authorId)
     status 400
     return "Invalid author id"
   end
@@ -201,10 +225,11 @@ post '/questions/:id/answers' do |id|
   now = Time.now.to_i
 
   answer[:id] = UUID.generate
+  answer[:authorId] = authorId
   answer[:createdAt] = now
-  answer[:createdById] = answerBody['authorId']
+  answer[:createdById] = authorId
   answer[:updatedAt] = now
-  answer[:updatedById] = answerBody['authorId']
+  answer[:updatedById] = authorId
   answer[:deletedAt] = nil
   answer[:deletedById] = nil
 
@@ -225,7 +250,8 @@ end
 ## GET
 
 get '/questions' do
-  unless authorize(request)
+  user = authorize(request)
+  unless user
     status 401
     return "Unauthorized"
   end
@@ -251,7 +277,8 @@ get '/questions' do
 end
 
 get '/questions/:id' do |id|
-  unless authorize(request)
+  user = authorize(request)
+  unless user
     status 401
     return "Unauthorized"
   end
@@ -271,7 +298,8 @@ get '/questions/:id' do |id|
 end
 
 get '/questions/:id/answers' do |id|
-  unless authorize(request)
+  user = authorize(request)
+  unless user
     status 401
     return "Unauthorized"
   end
@@ -284,4 +312,73 @@ get '/questions/:id/answers' do |id|
   #end validations
 
   JSON.dump(questionsAnswersHash[id.to_sym] || [])
+end
+
+get '/questions/:id/qna' do |id|
+  user = authorize(request)
+  unless user
+    status 401
+    return "Unauthorized"
+  end
+
+  # validations
+  unless id && !id.strip.empty? && UUID.validate(id)
+    status 400
+    return "Invalid question id."
+  end 
+  # end validations
+
+  return JSON.dump(nil) unless questionsHash[id.to_sym] && !questionsHash[id.to_sym][:deletedAt]
+  question = questionsHash[id.to_sym].dup 
+
+  question[:answers] = (questionsAnswersHash[id.to_sym] && questionsAnswersHash[id.to_sym].select {|a| !a[:deletedAt]}) || []
+
+  JSON.dump(question)
+end
+
+## DELETE
+
+delete '/questions/:id' do |id|
+  user = authorize(request)
+  unless user
+    status 401
+    return "Unauthorized"
+  end
+
+  deletedById = user[:sub]
+
+  question = questionsHash[id.to_sym]
+
+  #validations
+  unless id && !id.strip.empty? && UUID.validate(id)
+    status 400
+    return "Invalid question id."
+  end 
+
+  unless question
+    status 400
+    return "No question with id exists"
+  end
+
+  unless UUID.validate(deletedById)
+    status 400
+    return "Invalid deleted by id"
+  end
+  #end validations
+
+  return JSON.dump(question) if question[:deletedAt]
+  
+  now = Time.now
+
+  question[:deletedAt] = now
+  question[:deletedById] = deletedById
+
+  ## get this validated - only do if question has answers
+  questionsAnswersHash[id.to_sym].each do |answer|
+    answer[:deletedAt] = now
+    answer[:deletedById] = authorId
+    puts "answer deleted"
+  end
+
+  JSON.dump(question)
 end
