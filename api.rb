@@ -20,9 +20,9 @@ For our rest service that supports Q&A we will set up these route schemes:
   - data validation ****
 - Get all question answers ***
 - Get a questions and all of it's answers ***
-- Delete question
-- Delete answer
-- Filter all question answers
+- Delete question ***
+- Delete answer ***
+- Filter all question answers ***
 - Edit question
   - data validation
 - Edit answer
@@ -32,6 +32,8 @@ For our rest service that supports Q&A we will set up these route schemes:
 =end
 
 =begin
+
+  status options: [answered, unanswered]
 
   QUESTIONS
   id: UUID ~ auto generated
@@ -86,7 +88,8 @@ def authorize(request)
   fixedUser
 end
 
-## POST
+
+## ------------------------------------------------------------------------------------------- POST
 
 post '/questions' do
   user = authorize(request)
@@ -135,9 +138,6 @@ post '/questions' do
       question[key.to_sym] = questionBody[key]
   end
 
-  puts "USER"
-  p user
-
   question[:id] = UUID.generate
   question[:status] = 'unanswered'
   question[:authorId] = authorId
@@ -164,6 +164,7 @@ end
 # updatedById: UUID
 # deletedAt: number?
 # deletedById: UUID?
+
 
 
 post '/questions/:id/answers' do |id|
@@ -225,6 +226,7 @@ post '/questions/:id/answers' do |id|
   now = Time.now.to_i
 
   answer[:id] = UUID.generate
+  answer[:questionId] = id.to_sym
   answer[:authorId] = authorId
   answer[:createdAt] = now
   answer[:createdById] = authorId
@@ -246,8 +248,182 @@ post '/questions/:id/answers' do |id|
   JSON.dump(answer)  
 end
 
+## ------------------------------------------------------------------------------------------- PUT
+#this is going to be an upsert style - edit a question
 
-## GET
+## TESTS
+# new question + pat - ok
+# new question invalid id (new question post) - ok 
+# same info as an existing question - error - no method [] (to_a?) for nil
+
+
+put '/questions' do 
+  user = authorize(request)
+  unless user
+    status 401
+    return "Unauthorized"
+  end
+
+  postCheck = false
+  payloadOptions = ['title', 'description']
+
+  request.body.rewind  # in case someone already read it
+  questionBodyCheck = request.body.read 
+
+  puts "testing first validate"
+  if questionBodyCheck.empty?
+    status 400
+    return "Invalid payload."
+  end
+
+  questionBody = JSON.parse questionBodyCheck
+  qId = questionBody['id']
+  oldQ = questionsHash[qId] # this is not grabbing anything - will need to inspect the questions hash next time
+  #TODO: ^^
+
+  3.times {puts '*'}
+  puts "checking qId & oldQ"
+  p qId
+  puts ""
+  p oldQ
+  3.times {puts '*'}
+  
+  # this section confirms the id in the body - a valid id will mean that we need to update IF there is a difference in values
+  # otherwise we need to post 
+
+  if qId && !qId.strip.empty? && UUID.validate(qId) # question id in body and with valid format:
+    if questionsHash[qId.to_sym] # question id matches an existing question in our question hash
+      postCheck = false
+      questionExists = true # we need to now check diffs 
+    else
+      # question id IS in body but doesn't match an existing question - which should never happen
+      status 400
+      return "Invalid question id"
+    end
+  else
+    questionExists = false 
+  end
+
+  if questionExists
+    oldOptions = [oldQ[:title], oldQ[:description]]
+    newOptions = [qId[:title], qId[:description]]
+    if newOptions.difference(oldOptions).empty? # attempts to check differences between the passed in title and description against the existing question.
+      status 202
+      return "There were no updates made to the existing entry."
+    else
+      #needs to update 
+      postCheck = true # will do the put / patch after validations
+    end
+  else
+    postCheck = true
+  end
+
+  #--------------------#
+  requiredKeys = ['title', 'description']
+  #--------------------#
+
+  # THIS IS THE PATCH - ALLOWS FOR EMPTY KEYS IF EXISTING QUESTION ALREADY HAS THE INFO
+  if questionExists && postCheck
+    # copy over the existing fields if the questionBody doesn't have them
+
+    authorId = user[:sub]
+    now = Time.now.to_i
+
+    question = {}
+    questionBody.each_key do |key|
+      next if key == :id || key == 'id' #already exists 
+      question[key.to_sym] = questionBody[key]
+    end
+
+    #CHANGE THIS TO COMPARE EXISTING WITH GIVEN AND USE EXISTING IF GIVEN IS INVALID - Q ALREADY EXISTS
+    puts "testing second validate"
+    unless question.keys.difference(requiredKeys).empty?
+      status 400
+      return "Invalid payload."
+    end
+
+    requiredKeys.each do |key|
+      unless questionBody.has_key?(key) && questionBody[key].strip != ""
+        status 400
+        return "Invalid request, missing key: #{key}."
+      end
+    end
+
+    requiredKeys.each do |key|
+      if questionBody.has_key?(key) && ( questionBody[key].strip == "" || questionBody[key].nil? )
+        if oldQ[key]
+          questionBody[key] = oldQ[key]
+        else
+          status 400
+          return "Invalid request, missing key: #{key}."
+        end
+      end
+    end
+    
+    oldQ[:title] = questionBody[:title]
+    oldQ[:description] = questionBody[:description]
+    oldQ[:updatedAt] = now
+    old![:updatedById] = authorId
+
+    JSON.dump(oldQ)
+  end
+
+  # BASICALLY THE POST ABOVE - REQUIRES ALL KEYS TO BE IN QUESTION BODY
+  if !questionExists && postCheck
+    authorId = user[:sub]
+    now = Time.now.to_i
+
+    requiredKeys = ['title', 'description']
+
+    #data validation
+    updatedQuestionBody = []
+    questionBody.keys.each {|key| updatedQuestionBody << key unless key == 'id'}
+    puts "testing third validate"
+    unless updatedQuestionBody.difference(requiredKeys).empty?
+      status 400
+      return "Invalid payload."
+    end
+
+    requiredKeys.each do |key|
+      unless questionBody.has_key?(key) && questionBody[key].strip != ""
+        status 400
+        return "Invalid request, missing key: #{key}."
+      end
+    end
+
+    unless UUID.validate(authorId)
+      status 400
+      return "Invalid authorId."
+    end
+    #end data validation
+
+    now = Time.now.to_i
+
+    question = {}
+    questionBody.each_key do |key|
+      question[key.to_sym] = questionBody[key]
+    end
+
+    question[:id] = UUID.generate
+    question[:status] = 'unanswered'
+    question[:authorId] = authorId
+    question[:createdAt] = now
+    question[:createdById] = authorId
+    question[:updatedAt] = now
+    question[:updatedById] = authorId
+    question[:deletedAt] = nil
+    question[:deletedById] = nil
+
+    questionsArray << question
+    questionsHash[question[:id].to_sym] = question
+
+    JSON.dump(question)
+  end
+
+end
+
+
+## ------------------------------------------------------------------------------------------- GET
 
 get '/questions' do
   user = authorize(request)
@@ -256,7 +432,7 @@ get '/questions' do
     return "Unauthorized"
   end
 
-  queryKeys = ['id', 'title', 'description', 'authorId', 'createdById', 'updatedById', 'deletedById']
+  queryKeys = ['id', 'title', 'description', 'authorId', 'createdById', 'updatedById']
 
   hasFilter = queryKeys.reduce(false) do |accumulator, value|
     accumulator || (params.has_key?(value) && !params[value].empty?)
@@ -275,6 +451,8 @@ get '/questions' do
 
   JSON.dump(filteredQuestions)
 end
+
+
 
 get '/questions/:id' do |id|
   user = authorize(request)
@@ -297,6 +475,21 @@ get '/questions/:id' do |id|
   JSON.dump(questionsHash[id.to_sym])
 end
 
+
+
+# id: UUID ag
+# questionId: uuid *
+# answer: string *
+# authorId: UUID of an author (arbitrary string for example) *
+# createdAt: number
+# createdById: UUID
+# updatedAt: number
+# updatedById: UUID
+# deletedAt: number?
+# deletedById: UUID?
+
+
+
 get '/questions/:id/answers' do |id|
   user = authorize(request)
   unless user
@@ -311,8 +504,49 @@ get '/questions/:id/answers' do |id|
   end
   #end validations
 
-  JSON.dump(questionsAnswersHash[id.to_sym] || [])
+  return JSON.dump([]) if questionsHash[id.to_sym] && questionsHash[id.to_sym][:deletedAt]
+
+  activeAnswers = (questionsAnswersHash[id.to_sym] && questionsAnswersHash[id.to_sym].select {|a| !a[:deletedAt]}) || []
+
+  ## FILTER SECTION
+          #change id to answerId
+
+  
+  queryKeys = ['answerId', 'questionId', 'answer', 'authorId', 'createdById', 'updatedById']
+
+  hasFilter = queryKeys.reduce(false) do |accumulator, value|
+                    #this is always true in id
+    accumulator || (params.has_key?(value) && !params[value].empty?)
+  end
+
+  p hasFilter
+  return JSON.dump(activeAnswers) unless hasFilter
+
+  mapper = {}
+  mapper[:answerId] = {params: :answerId, object: :id}
+  mapper[:questionId] = {params: :questionId, object: :questionId}
+  mapper[:answer] = {params: :answer, object: :answer}
+  mapper[:authorId] = {params: :authorId, object: :authorId}
+  mapper[:createdById] = {params: :createdById, object: :createdById}
+  mapper[:updatedById] = {params: :updatedById, object: :updatedById}
+
+
+  filteredAnswers = activeAnswers.select do |answer|
+    queryKeys.reduce(false) do |accumulator, key|
+      paramsKey = mapper[key.to_sym][:params].to_s
+      objectKey = mapper[key.to_sym][:object]
+
+      # seems like key is actually passing value when ?answerId=xxxx...
+      accumulator || params.has_key?(paramsKey) && !params[paramsKey].empty? && answer[objectKey].strip.include?(params[paramsKey].strip)
+    end
+  end
+  puts "filterd"
+  p filteredAnswers
+ ## END FILTER
+
+  JSON.dump(filteredAnswers) 
 end
+
 
 get '/questions/:id/qna' do |id|
   user = authorize(request)
@@ -336,7 +570,7 @@ get '/questions/:id/qna' do |id|
   JSON.dump(question)
 end
 
-## DELETE
+## ------------------------------------------------------------------------------------------- DELETE
 
 delete '/questions/:id' do |id|
   user = authorize(request)
@@ -372,13 +606,64 @@ delete '/questions/:id' do |id|
 
   question[:deletedAt] = now
   question[:deletedById] = deletedById
+  question[:updatedAt] = now
+  question[:updatedById] = deletedById
 
-  ## get this validated - only do if question has answers
+  return JSON.dump(question) unless questionsAnswersHash[id.to_sym]
+
   questionsAnswersHash[id.to_sym].each do |answer|
+    answer[:deletedById] = deletedById
     answer[:deletedAt] = now
-    answer[:deletedById] = authorId
+    answer[:updatedAt] = now
+    answer[:updatedById] = deletedById
     puts "answer deleted"
   end
 
   JSON.dump(question)
 end
+
+
+
+delete '/questions/:id/answers/:aid' do |id, aid|
+  user = authorize(request)
+  unless user
+    status 401
+    return "Unauthorized"
+  end
+
+  deletedById = user[:sub]
+  answer = answersHash[aid.to_sym]
+
+  #validations
+   
+  unless id && !id.strip.empty? && UUID.validate(id)
+    status 400
+    return "Invalid question id."
+  end 
+  
+  unless aid && !aid.strip.empty? && UUID.validate(aid)
+    status 400
+    return "Invalid answer id."
+  end 
+
+  unless answer[:questionId] == id.to_sym
+    status 400
+    return 'Answer does not belong to given question.'
+  end
+  
+  #end validations
+
+  return JSON.dump(answer) if answer[:deletedAt]
+
+  now = Time.now
+
+  answer[:deletedAt] = now
+  answer[:deletedById] = deletedById
+  answer[:updatedAt] = now
+  answer[:updatedById] = deletedById
+
+  return JSON.dump(answer)
+
+end
+
+
