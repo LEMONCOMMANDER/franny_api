@@ -254,7 +254,8 @@ end
 ## TESTS
 # new question + pat - ok
 # new question invalid id (new question post) - ok 
-# same info as an existing question - error - no method [] (to_a?) for nil
+# same info as an existing question - ok
+# CHECK NOTES ON PATCH CHECK -- NOT ALL THE KEYS WILL NECESSARILY BE THERE...
 
 
 put '/questions' do 
@@ -278,10 +279,10 @@ put '/questions' do
 
   questionBody = JSON.parse questionBodyCheck
   qId = questionBody['id']
-  oldQ = questionsHash[qId] # this is not grabbing anything - will need to inspect the questions hash next time
+  oldQ = questionsHash[qId.to_sym] # this is not grabbing anything - will need to inspect the questions hash next time
   #TODO: ^^
 
-  3.times {puts '*'}
+  3.times {puts '-'}
   puts "checking qId & oldQ"
   p qId
   puts ""
@@ -291,7 +292,7 @@ put '/questions' do
   # this section confirms the id in the body - a valid id will mean that we need to update IF there is a difference in values
   # otherwise we need to post 
 
-  if qId && !qId.strip.empty? && UUID.validate(qId) # question id in body and with valid format:
+  if qId && !qId.strip.empty? && UUID.validate(qId.to_sym) # question id in body and with valid format: -- MAKE THIS A SYMBOL in the above def and then go through all the calls
     if questionsHash[qId.to_sym] # question id matches an existing question in our question hash
       postCheck = false
       questionExists = true # we need to now check diffs 
@@ -306,7 +307,7 @@ put '/questions' do
 
   if questionExists
     oldOptions = [oldQ[:title], oldQ[:description]]
-    newOptions = [qId[:title], qId[:description]]
+    newOptions = [questionBody[:title], questionBody[:description]] #THIS SHOULD BE QUESTION BODY INSTEAD OF QID (qid is just the id of question body)
     if newOptions.difference(oldOptions).empty? # attempts to check differences between the passed in title and description against the existing question.
       status 202
       return "There were no updates made to the existing entry."
@@ -327,7 +328,7 @@ put '/questions' do
     # copy over the existing fields if the questionBody doesn't have them
 
     authorId = user[:sub]
-    now = Time.now.to_i
+    now = Time.now
 
     question = {}
     questionBody.each_key do |key|
@@ -335,13 +336,16 @@ put '/questions' do
       question[key.to_sym] = questionBody[key]
     end
 
+    puts "second test"
+    p question.keys
+    p requiredKeys.map{|key| key.to_sym}
     #CHANGE THIS TO COMPARE EXISTING WITH GIVEN AND USE EXISTING IF GIVEN IS INVALID - Q ALREADY EXISTS
-    puts "testing second validate"
-    unless question.keys.difference(requiredKeys).empty?
+    unless question.keys.difference(requiredKeys.map{|key| key.to_sym}).empty?
       status 400
       return "Invalid payload."
     end
 
+    # in real world - key might not be present if only one thing was updated... so remove this section
     requiredKeys.each do |key|
       unless questionBody.has_key?(key) && questionBody[key].strip != ""
         status 400
@@ -349,6 +353,8 @@ put '/questions' do
       end
     end
 
+
+    #this also won't work because we may not get all the keys in question body - instead look through all the question body keys con compare
     requiredKeys.each do |key|
       if questionBody.has_key?(key) && ( questionBody[key].strip == "" || questionBody[key].nil? )
         if oldQ[key]
@@ -360,25 +366,28 @@ put '/questions' do
       end
     end
     
-    oldQ[:title] = questionBody[:title]
-    oldQ[:description] = questionBody[:description]
+    oldQ[:title] = questionBody['title']
+    oldQ[:description] = questionBody['description']
     oldQ[:updatedAt] = now
-    old![:updatedById] = authorId
+    oldQ[:updatedById] = authorId
 
-    JSON.dump(oldQ)
+
+    puts ""
+    p oldQ
+    return JSON.dump(oldQ)
   end
 
   # BASICALLY THE POST ABOVE - REQUIRES ALL KEYS TO BE IN QUESTION BODY
   if !questionExists && postCheck
-    authorId = user[:sub]
-    now = Time.now.to_i
+    puts "INSIDE OTHER IF STATEMENT"
+    authorId = user[:sub] #only use this one - just move it to the use area | confusing name
 
     requiredKeys = ['title', 'description']
 
+    puts "3rd test"
     #data validation
     updatedQuestionBody = []
     questionBody.keys.each {|key| updatedQuestionBody << key unless key == 'id'}
-    puts "testing third validate"
     unless updatedQuestionBody.difference(requiredKeys).empty?
       status 400
       return "Invalid payload."
@@ -417,10 +426,43 @@ put '/questions' do
     questionsArray << question
     questionsHash[question[:id].to_sym] = question
 
-    JSON.dump(question)
+    return JSON.dump(question)
   end
 
 end
+
+
+put '/answers' do
+  ser = authorize(request)
+  unless user
+    status 401
+    return "Unauthorized"
+  end
+
+  postCheck = false
+  payloadOptions = ['title', 'description']
+
+  request.body.rewind  # in case someone already read it
+  answerBodyCheck = request.body.read 
+
+  puts "testing first validate"
+  if answerBodyCheck.empty?
+    status 400
+    return "Invalid payload."
+  end
+
+  answerBody = JSON.parse answerBodyCheck
+
+  ##if answer body has a valid id, do a patch, otherwise to a post 
+
+
+
+  aId = answerBody['id']
+  oldA = answersHash[aId.to_sym] 
+
+
+end
+
 
 
 ## ------------------------------------------------------------------------------------------- GET
