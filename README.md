@@ -1,4 +1,4 @@
-#API PRACTICE
+# API PRACTICE
 
 This repo serves as a simple first practice towards a restful api using ruby and sinatra. 
 
